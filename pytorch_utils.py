@@ -4,7 +4,10 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torchvision.transforms as transforms
-from PIL import Image
+from PIL import Image, ImageFile
+import wandb
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 from sklearn.metrics import f1_score, precision_recall_fscore_support
 
 # For NO REASON PyTorch v0.2 doesn't actually come with this???
@@ -12,9 +15,9 @@ from torch.optim import Optimizer
 from bisect import bisect_right
 from torch.nn import Softmax
 
-TRAIN_PATH = "/mnt/disks/imagenet/ILSVRC2012_img_train"
+TRAIN_PATH = "/net/tscratch/datasets/AI/imagenet/data/train/"
 #TRAIN_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_train"
-VAL_PATH = "/mnt/disks/imagenet/ILSVRC2012_img_val/"
+VAL_PATH = "/net/tscratch/datasets/AI/imagenet/data/val/"
 #VAL_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_val"
 class _LRScheduler(object):
     def __init__(self, optimizer, last_epoch=-1):
@@ -283,7 +286,7 @@ def pytorch_accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch, loss_weight=0.2):
+def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch, loss_weight=0.2, loss_soft_weight=1):
     big_model.eval()
     big_model.cuda()
     small_model.train()
@@ -294,8 +297,9 @@ def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, e
 
     pbar = tqdm.tqdm(train_loader)
     for inp, class_target in pbar:
-        pbar.set_description('loss: %2.4f, acc: %2.1f' % (losses.avg, top1_acc.avg))
-        inp = inp.cuda(async=True)
+        pbar.set_description('loss: %2.4f, acc: %2.4f' % (losses.avg, top1_acc.avg))
+        wandb.log({"loss": losses.avg, "accuracy": top1_acc.avg})
+        inp = inp.cuda()
         input_var = torch.autograd.Variable(inp)
 
         logits_small = small_model(input_var) #type Var
@@ -309,16 +313,16 @@ def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, e
         loss_soft = torch.nn.BCELoss().cuda()(soft_logits_small, soft_logits_big)
 
         #output = logits_small
-        class_target = class_target.cuda(async=True)
+        class_target = class_target.cuda()
         class_target_var = torch.autograd.Variable(class_target)
         loss_hard = criterion(logits_small, class_target_var)
 
-        loss = loss_weight * loss_hard + loss_soft
+        loss = loss_weight * loss_hard + loss_soft * loss_soft_weight
         prec1 = pytorch_accuracy(logits_small.data, class_target)
         #f1score1 = pytorch_f1(output.data, target)
 
-        losses.update(loss.data[0], inp.size(0))
-        top1_acc.update(prec1[0][0], inp.size(0))
+        losses.update(loss.item(), inp.size(0))
+        top1_acc.update(prec1[0].item(), inp.size(0))
         #top1_f1.update(f1score1[0], inp.size(0))
 
         optimizer.zero_grad()
@@ -334,8 +338,8 @@ def val_epoch(val_loader, model, criterion): #temperature 1
     targets = np.array([])
     preds = np.array([])
     for i, (inp, target) in enumerate(val_loader):
-        inp = inp.cuda(async=True)
-        target_cuda = target.cuda(async=True)
+        inp = inp.cuda()
+        target_cuda = target.cuda()
         input_var = torch.autograd.Variable(inp, volatile=True)
         target_var = torch.autograd.Variable(target_cuda, volatile=True)
 
@@ -345,8 +349,8 @@ def val_epoch(val_loader, model, criterion): #temperature 1
         targets = np.append(targets, target.cpu().numpy())
         preds = np.append(preds, np.argmax(output.data.cpu().numpy(), axis=1))
 
-        losses.update(loss.data[0], inp.size(0))
-        top1_acc.update(prec1[0][0], inp.size(0))
+        losses.update(loss.item(), inp.size(0))
+        top1_acc.update(prec1[0].item(), inp.size(0))
     #top1_f1 = f1_score(targets, preds, average='binary')*100.0
     return losses.avg, top1_acc.avg #top1_f1
 
@@ -390,13 +394,13 @@ def trainer(big_model, small_model, T, criterion, optimizer, scheduler,
         if scheduler_arg == 'loss':
             scheduler.step(val_loss)
 
-    print 'Best loss: ' + str(best_loss)
-    print 'Best acc: ' + str(best_acc)
+    print ('Best loss: ' + str(best_loss))
+    print ('Best acc: ' + str(best_acc))
     return best_acc
 
 def get_datasets(CLASS_NAMES=None,
                  normalize=None, RESOL=224,
-                 batch_size=32, num_workers=16,
+                 batch_size=128, num_workers=16,
                  use_rotate=False):
     #NB_CLASSES = len(train_fnames)
     #assert NB_CLASSES == len(val_fnames)
@@ -420,7 +424,7 @@ def get_datasets(CLASS_NAMES=None,
     train_dataset = ImageList(
             CLASS_NAMES, train_imgs,
             transforms.Compose(rotation + [
-                    transforms.RandomSizedCrop(RESOL),
+                    transforms.RandomResizedCrop(RESOL),
                     transforms.RandomHorizontalFlip(),
                     transforms.ToTensor(),
                     normalize,
@@ -428,7 +432,7 @@ def get_datasets(CLASS_NAMES=None,
     val_dataset = ImageList(
             CLASS_NAMES, val_imgs,
             transforms.Compose([
-                    transforms.Scale(int(256.0 / 224.0 * RESOL)),
+                    transforms.Resize(int(256.0 / 224.0 * RESOL)),
                     transforms.CenterCrop(RESOL),
                     transforms.ToTensor(),
                     normalize,
@@ -444,13 +448,13 @@ def get_datasets(CLASS_NAMES=None,
             shuffle=False, pin_memory=True)
     '''
     train_transform = transforms.Compose([
-        transforms.RandomSizedCrop(RESOL),
+        transforms.RandomResizedCrop(RESOL),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean = [ 0.485, 0.456, 0.406 ], std = [ 0.229, 0.224, 0.225 ]),
         ])
     val_transform = transforms.Compose([
-        transforms.Scale(int(256.0 / 224.0 * RESOL)),
+        transforms.Resize(int(256.0 / 224.0 * RESOL)),
         transforms.CenterCrop(RESOL),
         transforms.ToTensor(),
         transforms.Normalize(mean = [ 0.485, 0.456, 0.406 ], std = [ 0.229, 0.224, 0.225 ]),

@@ -1,0 +1,10 @@
+*.out
+*.log
+*.aux
+*.bbl
+*.json
+*.blg
+*.pyc
+*.t7
+*wandb*
+*.txt

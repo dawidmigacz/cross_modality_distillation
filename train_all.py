@@ -24,9 +24,9 @@ import sys
 sys.path.append('../')
 
 
-TRAIN_PATH = "/mnt/disks/imagenet/ILSVRC2012_img_train"
+TRAIN_PATH = "/net/tscratch/datasets/AI/imagenet/data/train/"
 #TRAIN_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_train"
-VAL_PATH = "/mnt/disks/imagenet/ILSVRC2012_img_val/"
+VAL_PATH = "/net/tscratch/datasets/AI/imagenet/data/val/"
 #VAL_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_val"
 
 def main():
@@ -35,8 +35,13 @@ def main():
     parser.add_argument('--resol', default=224, type=int, help="Resolution")
     parser.add_argument('--temp', required=True, help="Softmax temperature")
     args = parser.parse_args()
+    import wandb
 
-
+    wandb.init(project="hinton", config={
+        "temperature": args.temp,
+        "small_model": args.model,
+        "dataset": "ImageNet",
+    })
     model_urls = {
         'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
         'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
@@ -91,7 +96,7 @@ def train(big_model, small_model, args):
 
     RESOL = args.resol
     NB_CLASSES = 1000
-    print "Loading images..."
+    print("Loading images...")
     #train_fnames = load_all_data(TRAIN_PATH)
     #val_fnames = load_all_data(VAL_PATH)
 

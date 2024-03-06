@@ -65,7 +65,7 @@ class ZeroPadBN(nn.Module):
                 len(new_inds) + len(cur_indexes)
             zbn1 = ZeroPadBN(new_indexes, nn.Sequential())
             zbn2 = ZeroPadBN(cur_indexes.cpu().numpy(), nn.Sequential())
-            inp = torch.ones(1, max_ind, 1, 1).cuda(async=True)
+            inp = torch.ones(1, max_ind, 1, 1).cuda()
             tmp = zbn2.forward(zbn1.forward(inp)).squeeze().data.cpu().numpy()
             tmp = np.where(tmp == 0)[0]
             tmp = torch.from_numpy(np.array(tmp, dtype=int))
@@ -83,7 +83,7 @@ class ZeroPadBN(nn.Module):
 
         with_zeros = Variable(torch.cuda.FloatTensor(x.size(0), total_num_filters, x.size(2), x.size(3)).zero_())
         alive_filters_indices = [i for i in range(total_num_filters) if i not in self.set_ind]
-        with_zeros.index_copy_(1, Variable(torch.LongTensor(alive_filters_indices)).cuda(async=True), x)
+        with_zeros.index_copy_(1, Variable(torch.LongTensor(alive_filters_indices)).cuda(), x)
 
         return with_zeros
 
