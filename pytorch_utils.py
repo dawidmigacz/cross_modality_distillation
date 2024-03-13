@@ -16,9 +16,10 @@ from bisect import bisect_right
 from torch.nn import Softmax
 
 TRAIN_PATH = "/net/tscratch/datasets/AI/imagenet/data/train/"
-#TRAIN_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_train"
 VAL_PATH = "/net/tscratch/datasets/AI/imagenet/data/val/"
-#VAL_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_val"
+
+
+
 class _LRScheduler(object):
     def __init__(self, optimizer, last_epoch=-1):
         if not isinstance(optimizer, Optimizer):
@@ -286,7 +287,7 @@ def pytorch_accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch, loss_weight=0.2, loss_soft_weight=1):
+def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch, loss_weight=0.2, args=None):
     big_model.eval()
     big_model.cuda()
     small_model.train()
@@ -294,6 +295,7 @@ def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, e
     losses = AverageMeter()
     top1_acc = AverageMeter()
     #top1_f1 = AverageMeter()
+    loss_soft_weight = args.distillation_weight
 
     pbar = tqdm.tqdm(train_loader)
     for inp, class_target in pbar:
@@ -308,8 +310,7 @@ def train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, e
         #logits_big_var = torch.autograd.Variable(torch.div(logits_big.data, T).cuda())
 
         soft_logits_small = Softmax()(logits_small * 1.0/T) 
-        soft_logits_big = Softmax()(logits_big *1.0/T)
-
+        soft_logits_big = Softmax()(logits_big *1.0/T)[0:logits_small.size(0), 0:logits_small.size(1)]
         loss_soft = torch.nn.BCELoss().cuda()(soft_logits_small, soft_logits_big)
 
         #output = logits_small
@@ -340,8 +341,10 @@ def val_epoch(val_loader, model, criterion): #temperature 1
     for i, (inp, target) in enumerate(val_loader):
         inp = inp.cuda()
         target_cuda = target.cuda()
-        input_var = torch.autograd.Variable(inp, volatile=True)
-        target_var = torch.autograd.Variable(target_cuda, volatile=True)
+
+        with torch.no_grad():
+            input_var = torch.autograd.Variable(inp)
+            target_var = torch.autograd.Variable(target_cuda)
 
         output = model(input_var)
         loss = criterion(output, target_var)
@@ -360,7 +363,7 @@ def trainer(big_model, small_model, T, criterion, optimizer, scheduler,
             nb_epochs=50,
             patience=5, save_every=5,
             model_ckpt_name='model-epoch{epoch:02d}.t7', model_best_name='model.best.t7',
-            scheduler_arg='loss'): # 'loss' or 'epoch'
+            scheduler_arg='loss', args=None): # 'loss' or 'epoch'
     train_loader, val_loader = loaders
 
     best_loss = (float('Inf'), -1)
@@ -371,9 +374,11 @@ def trainer(big_model, small_model, T, criterion, optimizer, scheduler,
     for epoch in pbar:
         if scheduler_arg == 'epoch':
             scheduler.step(epoch)
-        train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch)
-
+        train_epoch(train_loader, big_model, small_model, T, criterion, optimizer, epoch, args=args)
+        
         val_loss, val_acc = val_epoch(val_loader, small_model, criterion)
+        print("big", val_epoch(val_loader, big_model, criterion))
+        wandb.log({"val_loss": val_loss, "val_accuracy": val_acc})
         pbar.set_description('val loss: %2.4f, val acc: %2.1f' % (val_loss, val_acc))
 
         if val_loss < best_loss[0]:
@@ -471,3 +476,25 @@ def get_datasets(CLASS_NAMES=None,
             batch_size=batch_size, num_workers=num_workers,
             shuffle=False, pin_memory=True)
     return train_loader, val_loader
+
+
+
+def get_dataset_cifar(batch_size=64, num_workers=0):
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                            download=True, transform=transform)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                              shuffle=True, num_workers=num_workers)
+
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                           download=True, transform=transform)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
+                                             shuffle=False, num_workers=num_workers)
+
+    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    return trainloader, testloader

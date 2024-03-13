@@ -8,3 +8,8 @@
 *.t7
 *wandb*
 *.txt
+*.pth
+*data*
+*ckpt*
+*epoch*
+*t7*

@@ -9,6 +9,94 @@ from torch.autograd import Variable
 __all__ = ['ResNet', 'resnet18', 'rn_builder']
 
 
+class DropBlock2D(nn.Module):
+    r"""Randomly zeroes 2D spatial blocks of the input tensor.
+
+    As described in the paper
+    `DropBlock: A regularization method for convolutional networks`_ ,
+    dropping whole blocks of feature map allows to remove semantic
+    information as compared to regular dropout.
+
+    Args:
+        drop_prob (float): probability of an element to be dropped.
+        block_size (int): size of the block to drop
+
+    Shape:
+        - Input: `(N, C, H, W)`
+        - Output: `(N, C, H, W)`
+
+    .. _DropBlock: A regularization method for convolutional networks:
+       https://arxiv.org/abs/1810.12890
+
+    """
+
+    def __init__(self, drop_prob=0.2, block_size=7, masks=None):
+        super(DropBlock2D, self).__init__()
+
+        self.drop_prob = drop_prob
+        self.block_size = block_size
+        self.masks_in = masks
+        if masks is None:
+            self.masks_out = []
+
+    def __str__(self) -> str:
+        return f"DropBlock2D(drop_prob={self.drop_prob}, block_size={self.block_size})"
+    
+    def __repr__(self) -> str:
+        return f"DropBlock2D(drop_prob={self.drop_prob}, block_size={self.block_size})"
+    
+
+    def forward(self, x):
+        # shape: (bsize, channels, height, width)
+
+        assert x.dim() == 4, \
+            "Expected input with 4 dimensions (bsize, channels, height, width)"
+
+        if not self.training or self.drop_prob == 0.:
+            return x
+        elif self.masks_in is None:
+            # get gamma value
+            gamma = self._compute_gamma(x)
+
+            # sample mask
+            mask = (torch.rand(x.shape[0], *x.shape[2:]) < gamma).float()
+
+            # place mask on input device
+            mask = mask.to(x.device)
+
+            # compute block mask
+            block_mask = self._compute_block_mask(mask)
+            self.masks_out.append(block_mask)
+
+            # apply block mask
+            out = x * block_mask[:, None, :, :]
+
+            # scale output
+            out = out * block_mask.numel() / block_mask.sum()
+
+            return out
+        elif self.masks_in is not None:
+            block_mask = self.masks_in.pop(0)
+            out = x * block_mask[:, None, :, :]
+            out = out * block_mask.numel() / block_mask.sum()
+            return out
+
+    def _compute_block_mask(self, mask):
+        block_mask = F.max_pool2d(input=mask[:, None, :, :],
+                                  kernel_size=(self.block_size, self.block_size),
+                                  stride=(1, 1),
+                                  padding=self.block_size // 2)
+
+        if self.block_size % 2 == 0:
+            block_mask = block_mask[:, :, :-1, :-1]
+
+        block_mask = 1 - block_mask.squeeze(1)
+
+        return block_mask
+
+    def _compute_gamma(self, x):
+        return self.drop_prob / (self.block_size ** 2)
+
 class PassZeros(nn.Module):
     def __init__(self, out_size, conv):
         super(PassZeros, self).__init__()
@@ -97,15 +185,27 @@ class MyModuleList(nn.ModuleList):
             x = layer(x)
         return x
 
-def make_basic_block(inplanes, planes, stride=1, downsample=None):
+def make_basic_block(inplanes, planes, stride=1, downsample=None, args=None):
+    if args is not None:
+        db_prob = args.dropblock_prob
+        block_size = args.dropblock_size
+        do_prob = args.dropout
+    else:
+        db_prob = 0.0
+        block_size = 7
+        do_prob = 0.0
     def conv3x3(in_planes, out_planes, stride=1):
         return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                          padding=1, bias=False)
 
     block_list = MyModuleList([
+            nn.Dropout2d(do_prob),
+            DropBlock2D(drop_prob=db_prob, block_size=block_size),
             conv3x3(inplanes, planes, stride),
             nn.BatchNorm2d(planes),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(p=do_prob),
+            DropBlock2D(drop_prob=db_prob, block_size=block_size),
             conv3x3(planes, planes),
             nn.BatchNorm2d(planes),
     ])
@@ -115,18 +215,30 @@ def make_basic_block(inplanes, planes, stride=1, downsample=None):
         residual = downsample
     return (block_list, residual)
 
-def make_bottleneck_block(inplanes, planes, stride=1, downsample=None):
+def make_bottleneck_block(inplanes, planes, stride=1, downsample=None, args=None):
+    print(args)
+    if args is not None:
+        db_prob = args.dropblock_prob
+        block_size = args.dropblock_size
+        do_prob = args.dropout
+    else:
+        db_prob = 0.0
+        block_size = 7
+        do_prob = 0.0
     block_list = MyModuleList([
             # conv bn relu
             nn.Conv2d(inplanes, planes, kernel_size=1, bias=False),
             nn.BatchNorm2d(planes),
             nn.ReLU(inplace=True),
             # conv bn relu
+            nn.Dropout2d(do_prob),
+            DropBlock2D(drop_prob=db_prob, block_size=block_size),
             nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
                       padding=1, bias=False),
             nn.BatchNorm2d(planes),
             nn.ReLU(inplace=True),
-            # conv bn
+            nn.Dropout2d(do_prob),
+            DropBlock2D(drop_prob=db_prob, block_size=block_size),
             nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False),
             nn.BatchNorm2d(planes * 4),
     ])
@@ -138,14 +250,15 @@ def make_bottleneck_block(inplanes, planes, stride=1, downsample=None):
 
 class ResNet(nn.Module):
     def __init__(self, section_reps,
-                 num_classes=1000, nbf=64,
+                 num_classes=10, nbf=64,
                  conv1_size=7, conv1_pad=3,
                  downsample_start=True,
                  use_basic_block=True,
                  train_death_rate=None,
-                 test_death_rate=None):
+                 test_death_rate=None, args=None):
         super(ResNet, self).__init__()
 
+        self.args=args
         if train_death_rate == None:
             self.train_death_rate = [[0.0] * x for x in section_reps]
         else:
@@ -216,10 +329,10 @@ class ResNet(nn.Module):
             downsample = None
 
         blocks = []
-        blocks.append(self.block_fn(self.inplanes, planes, stride, downsample))
+        blocks.append(self.block_fn(self.inplanes, planes, stride, downsample, args=self.args))
         self.inplanes = planes * self.expansion
         for i in range(1, num_blocks):
-            blocks.append(self.block_fn(self.inplanes, planes))
+            blocks.append(self.block_fn(self.inplanes, planes, args=self.args))
 
         return blocks
 

@@ -25,22 +25,37 @@ sys.path.append('../')
 
 
 TRAIN_PATH = "/net/tscratch/datasets/AI/imagenet/data/train/"
-#TRAIN_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_train"
 VAL_PATH = "/net/tscratch/datasets/AI/imagenet/data/val/"
-#VAL_PATH = "/lfs/raiders3/1/ddkang/imagenet/ilsvrc2012/ILSVRC2012_img_val"
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', required=True, help="Small model")
-    parser.add_argument('--resol', default=224, type=int, help="Resolution")
-    parser.add_argument('--temp', required=True, help="Softmax temperature")
-    args = parser.parse_args()
+
+def main(args=None):
+    if args is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--model', required=True, help="Small model")
+        parser.add_argument('--resol', default=224, type=int, help="Resolution")
+        parser.add_argument('--temp', required=True, help="Softmax temperature")
+        parser.add_argument('--dropout', default=0.0, type=float, help="Dropout")
+        parser.add_argument('--dropblock_prob', default=0.0, type=float, help="Dropblock prob")
+        parser.add_argument('--dropblock_size', default=7, type=int, help="Dropblock size")
+        parser.add_argument('--distillation_weight', default=1, type=float, help="Distillation weight")
+        args = parser.parse_args()
+
+
+
     import wandb
-
-    wandb.init(project="hinton", config={
+    run_name = f"do{args.dropout}-dbp{args.dropblock_prob}-dbs{args.dropblock_size}-t{args.temp}-m{args.model}-dist{args.distillation_weight}"
+    print(run_name)
+    wandb.init(project="hinton", 
+               name = run_name,
+               config={
         "temperature": args.temp,
         "small_model": args.model,
-        "dataset": "ImageNet",
+        "dataset": "cifar",
+        "dropout": args.dropout,
+        "dropblock_prob": args.dropblock_prob,
+        "dropblock_size": args.dropblock_size,
+        "distillation_weight": args.distillation_weight,
+        
     })
     model_urls = {
         'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -71,11 +86,33 @@ def main():
     for p in big_model.parameters():
         p.requires_grad=False
     small_model = pytorch_resnet.rn_builder(name_to_params[args.model],
-                                            num_classes=1000, 
+                                            num_classes=10, 
                                             conv1_size=3, conv1_pad=1, nbf=16,
-                                            downsample_start=False)
+                                            downsample_start=False, args=args)
+    
+    # big_model = pytorch_resnet.rn_builder(name_to_params['trn18'],
+    #                                         num_classes=10, 
+    #                                         conv1_size=3, conv1_pad=1, nbf=16,
+    #                                         downsample_start=False, args=args)
+    
 
-    train(big_model, small_model, args)
+    
+    # with open('trn18-1-224-e40-sgd-cc.t7', 'rb') as f:
+    #     checkpoint = torch.load(f)
+    #     big_model.load_state_dict(checkpoint['state_dict'])
+    #     big_model = big_model.cuda()
+
+
+    def print_model_to_file(model, filename):
+        with open(filename, 'w') as f:
+            f.write(str(model))
+            f.write('\n\n')
+
+    print_model_to_file(big_model, 'model_architecture_b.txt')
+    print_model_to_file(small_model, 'model_architecture_s.txt')
+    t = train(big_model, small_model, args)
+    wandb.finish()
+    return t
 
 
 def load_all_data(path):
@@ -109,9 +146,14 @@ def train(big_model, small_model, args):
 
     SMALL_MODEL_NAME = args.model
     TEMPERATURE = int(args.temp)
-    train_loader, val_loader = get_datasets()#train_fnames, val_fnames)
-    s1 = '%s-%d-%d-epoch{epoch:02d}-sgd-cc.t7' % (SMALL_MODEL_NAME, TEMPERATURE, RESOL)
-    s2 = '%s-%d-%d-best-sgd-cc.t7' % (SMALL_MODEL_NAME, TEMPERATURE, RESOL)
+    #RESOL = 32
+    DROPBLOCK_SIZE = args.dropblock_size
+    DROPBLOCK_PROB = args.dropblock_prob
+    DROPOUT = args.dropout
+    train_loader, val_loader = get_dataset_cifar()#train_fnames, val_fnames)
+    s1 = f'{SMALL_MODEL_NAME}-{TEMPERATURE}-{RESOL}-e{{epoch:02d}}-sgd-cc.t7' + \
+         f'-do{DROPOUT}-dbp{DROPBLOCK_PROB}-dbs{DROPBLOCK_SIZE}'
+    s2 = 'best-' + s1
 
     #big_model = nn.Sequential(*list(big_model.features.children())[:-1])
     #print (big_model)
@@ -127,16 +169,16 @@ def train(big_model, small_model, args):
     best_acc = trainer(big_model, small_model, TEMPERATURE, criterion, optimizer, scheduler,
                         (train_loader, val_loader),
                         nb_epochs=100, model_ckpt_name=s1, model_best_name=s2,
-                        scheduler_arg='loss', save_every=10)
+                        scheduler_arg='loss', save_every=10, args=args)
     #best_f1_val, best_f1_epoch = best_f1
     best_acc_val, best_acc_epoch = best_acc
 
     with open('results.csv', 'a') as f:
         writer = csv.writer(f)
-        writer.writerow([args.model, args.resol, args.temp, best_acc_val, best_acc_epoch])
-
+        writer.writerow([args.model, args.temp, args.dropout, args.dropblock_prob, args.dropblock_size, args.distillation_weight, best_acc_val, best_acc_epoch])
     # Touch file at end
     #open('%s.txt' % FILE_BASE, 'a').close()
+    return best_acc_val, best_acc_epoch
 
 
 if __name__ =='__main__':
