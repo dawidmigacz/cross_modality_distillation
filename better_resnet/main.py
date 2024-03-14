@@ -36,6 +36,7 @@ class Trainer:
         self.big_net = None
         self.criterion = None
         self.last_file = None
+        self.dropblock_sync = False
 
     def main(self):
 
@@ -43,7 +44,22 @@ class Trainer:
         parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
         parser.add_argument('--resume', '-r', action='store_true',
                             help='resume from checkpoint')
+        parser.add_argument('--db_p', default=0.1, type=float, help='dropblock_prob')
+        parser.add_argument('--db_size', default=3, type=int, help='dropblock_size')
+        parser.add_argument('--dw', default=0.0, type=float, help='distillation_weight')
+        parser.add_argument('--db_sync', default=False, type=bool, help='dropblock_sync')
+        parser.add_argument('--filename_small', default=None, type=str, help='filename - to resume')
+        parser.add_argument('--filename_big', default=None, type=str, help='filename_big')
+
         self.args = parser.parse_args()
+
+        self.dropblock_prob = self.args.db_p
+        self.dropblock_size = self.args.db_size
+        self.distillation_weight = self.args.dw
+        self.dropblock_sync = self.args.db_sync
+        self.filename_small = self.args.filename_small
+        self.filename_big = self.args.filename_big
+        
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.best_acc = 0  # best test accuracy
@@ -102,7 +118,7 @@ class Trainer:
             # Load checkpoint.
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            self.filename = "ckpt_acc95.66_e192_dbs3_dbp0.1_dw1.0.pth"
+            self.filename = self.args.filename
             self.checkpoint = torch.load(f'./checkpoint/{self.filename}')
             self.small_net.load_state_dict(self.checkpoint['net'])
             self.best_acc = self.checkpoint['acc']
@@ -141,12 +157,14 @@ class Trainer:
         print('\nEpoch: %d' % epoch)
         self.small_net.train()
         self.big_net.eval()
-
         common_seed = int(time.time()*10**10)
         eval_generator1 = torch.Generator()
         eval_generator1.manual_seed(common_seed)
         eval_generator2 = torch.Generator()
-        eval_generator2.manual_seed(common_seed)
+        if self.dropblock_sync:
+            eval_generator2.manual_seed(common_seed)
+        else:
+            eval_generator2.manual_seed(common_seed+17)
         change_drop_generator(self.small_net, eval_generator1)
         change_drop_generator(self.big_net, eval_generator2)
         train_loss = 0
