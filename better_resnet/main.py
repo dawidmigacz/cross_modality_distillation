@@ -1,4 +1,5 @@
 '''Train CIFAR10 with PyTorch.'''
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,7 +16,14 @@ from models import *
 from models.resnet import ResNet18
 from tqdm import tqdm
 import wandb
+from models.resnet import DropBlock2D
 
+def change_drop_generator(model, new_generator):
+    for child in model.children():
+        if isinstance(child, DropBlock2D):
+            child.drop_generator = new_generator
+        else:
+            change_drop_generator(child, new_generator)
 class Trainer:
     def __init__(self, dropblock_prob=0.15, dropblock_size=3, distillation_weight=0.0):
         self.dropblock_prob = dropblock_prob
@@ -24,7 +32,8 @@ class Trainer:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.best_acc = 0
         self.start_epoch = 0
-        self.net = None
+        self.small_net = None
+        self.big_net = None
         self.criterion = None
         self.last_file = None
 
@@ -67,43 +76,41 @@ class Trainer:
         self.classes = ('plane', 'car', 'bird', 'cat', 'deer',
                 'dog', 'frog', 'horse', 'ship', 'truck')
 
-        # Model
-        # print('==> Building model..')
-        # net = VGG('VGG19')
-        self.net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size)
-        # net = PreActResNet18()
-        # net = GoogLeNet()
-        # net = DenseNet121()
-        # net = ResNeXt29_2x64d()
-        # net = MobileNet()
-        # net = MobileNetV2()
-        # net = DPN92()
-        # net = ShuffleNetG2()
-        # net = SENet18()
-        # net = ShuffleNetV2(1)
-        # net = EfficientNetB0()
-        # net = RegNetX_200MF()
-        # net = SimpleDLA()
-        self.net = self.net.to(self.device)
-        with open('resnet18.txt', 'w') as f:
-            f.write(str(self.net))
 
+        self.small_net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=False)
+        self.small_net = self.small_net.to(self.device)
+        self.big_net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=True)
+        self.big_net = self.big_net.to(self.device)
+        
         if self.device == 'cuda':
-            self.net = torch.nn.DataParallel(self.net)
+            self.small_net = torch.nn.DataParallel(self.small_net)
+            self.big_net = torch.nn.DataParallel(self.big_net)
             cudnn.benchmark = True
+
+        self.filename_big = "ckpt_acc95.75_e197_dbs3_dbp0.1_dw0.0.pth"
+        self.checkpoint_big = torch.load(f'./checkpoint/{self.filename_big}')
+
+        self.big_net.load_state_dict(self.checkpoint_big['net'])
+        print('Loaded big net, acc', self.checkpoint_big['acc'])
+
+        with open('nets_made.txt', 'w') as f:
+            f.write(str(self.small_net))
+            f.write(str(self.big_net))
+
 
         if self.args.resume:
             # Load checkpoint.
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            self.filename = "ckpt_acc83.90_e66_dbs3_dbp0.15_dw0.0.pth"
+            self.filename = "ckpt_acc95.66_e192_dbs3_dbp0.1_dw1.0.pth"
             self.checkpoint = torch.load(f'./checkpoint/{self.filename}')
-            self.net.load_state_dict(self.checkpoint['net'])
+            self.small_net.load_state_dict(self.checkpoint['net'])
             self.best_acc = self.checkpoint['acc']
             self.start_epoch = self.checkpoint['epoch']
 
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.SGD(self.net.parameters(), lr=self.args.lr,
+        self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
+        self.optimizer = optim.SGD(self.small_net.parameters(), lr=self.args.lr,
                             momentum=0.9, weight_decay=5e-4)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200)
 
@@ -132,7 +139,16 @@ class Trainer:
 
     def train(self, epoch):
         print('\nEpoch: %d' % epoch)
-        self.net.train()
+        self.small_net.train()
+        self.big_net.eval()
+
+        common_seed = int(time.time()*10**10)
+        eval_generator1 = torch.Generator()
+        eval_generator1.manual_seed(common_seed)
+        eval_generator2 = torch.Generator()
+        eval_generator2.manual_seed(common_seed)
+        change_drop_generator(self.small_net, eval_generator1)
+        change_drop_generator(self.big_net, eval_generator2)
         train_loss = 0
         correct = 0
         total = 0
@@ -140,8 +156,18 @@ class Trainer:
         for batch_idx, (inputs, targets) in progress_bar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            outputs = self.net(inputs)
+            outputs = self.small_net(inputs)
+            big_outputs = self.big_net(inputs)
+            soft_big_outputs = F.softmax(big_outputs, dim=1)
+            soft_outputs = F.softmax(outputs, dim=1)
+
+
             loss = self.criterion(outputs, targets)
+
+
+            if self.distillation_weight > 0:
+                distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
+                loss += self.distillation_weight * distillation_loss
             loss.backward()
             self.optimizer.step()
 
@@ -157,7 +183,23 @@ class Trainer:
 
 
     def test(self, epoch):
-        self.net.eval()
+        self.small_net.eval()
+        self.big_net.eval()
+
+
+
+        common_seed = int(time.time()*10**10)
+        eval_generator1 = torch.Generator()
+        eval_generator1.manual_seed(common_seed)
+        eval_generator2 = torch.Generator()
+        eval_generator2.manual_seed(common_seed)
+        change_drop_generator(self.small_net, eval_generator1)
+        change_drop_generator(self.big_net, eval_generator2)
+
+
+        with open('nets_eval.txt', 'w') as f:
+            f.write(str(self.small_net))
+            f.write(str(self.big_net))
         test_loss = 0
         correct = 0
         total = 0
@@ -165,7 +207,7 @@ class Trainer:
             progress_bar = tqdm(enumerate(self.testloader), total=len(self.testloader))
             for batch_idx, (inputs, targets) in progress_bar:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                outputs = self.net(inputs)
+                outputs = self.small_net(inputs)
                 loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()
@@ -181,9 +223,9 @@ class Trainer:
 
         # Save checkpoint.
         acc = 100.*correct/total
-        if acc > self.best_acc:
+        if acc > self.best_acc and acc > 79.5:
             state = {
-                'net': self.net.state_dict(),
+                'net': self.small_net.state_dict(),
                 'acc': acc,
                 'epoch': epoch,
             }
@@ -201,5 +243,5 @@ class Trainer:
 
 
 if __name__ == '__main__':
-    trainer = Trainer(dropblock_prob=0.3, dropblock_size=3, distillation_weight=0.0)
+    trainer = Trainer(dropblock_prob=0.1, dropblock_size=3, distillation_weight=1.0)
     trainer.main()
