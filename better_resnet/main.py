@@ -53,13 +53,17 @@ class Trainer:
 
         self.args = parser.parse_args()
 
+        print(self.args)
+
+
         self.dropblock_prob = self.args.db_p
         self.dropblock_size = self.args.db_size
         self.distillation_weight = self.args.dw
         self.dropblock_sync = self.args.db_sync
         self.filename_small = self.args.filename_small
         self.filename_big = self.args.filename_big
-        
+
+
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.best_acc = 0  # best test accuracy
@@ -103,7 +107,6 @@ class Trainer:
             self.big_net = torch.nn.DataParallel(self.big_net)
             cudnn.benchmark = True
 
-        self.filename_big = "ckpt_acc95.75_e197_dbs3_dbp0.1_dw0.0.pth"
         self.checkpoint_big = torch.load(f'./checkpoint/{self.filename_big}')
 
         self.big_net.load_state_dict(self.checkpoint_big['net'])
@@ -248,6 +251,8 @@ class Trainer:
                 'epoch': epoch,
             }
             filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight)
+            if self.dropblock_sync:
+                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight)
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
             torch.save(state, filename)
