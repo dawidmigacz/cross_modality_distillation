@@ -121,8 +121,7 @@ class Trainer:
             # Load checkpoint.
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            self.filename = self.args.filename
-            self.checkpoint = torch.load(f'./checkpoint/{self.filename}')
+            self.checkpoint = torch.load(f'./checkpoint/{self.filename_small}')
             self.small_net.load_state_dict(self.checkpoint['net'])
             self.best_acc = self.checkpoint['acc']
             self.start_epoch = self.checkpoint['epoch']
@@ -151,7 +150,7 @@ class Trainer:
             self.scheduler.step()
 
         with open('results.txt', 'a') as f:
-            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}\n")
+            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}\n")
         wandb.finish()
 
     # Training
