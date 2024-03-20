@@ -165,7 +165,7 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, drop_prob=0.13, block_size=3, drop_at_inference=False, drop_generator=None):
+    def __init__(self, block, num_blocks, num_classes=100, drop_prob=0.13, block_size=3, drop_at_inference=False, drop_generator=None):
         super(ResNet, self).__init__()
         self.in_planes = 64
         self.drop_prob = drop_prob
@@ -187,7 +187,6 @@ class ResNet(nn.Module):
             layers.append(block(self.in_planes, planes, stride, drop_prob, block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
-    
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
