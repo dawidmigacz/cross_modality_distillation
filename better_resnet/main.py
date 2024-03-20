@@ -37,6 +37,8 @@ class Trainer:
         self.criterion = None
         self.last_file = None
         self.dropblock_sync = False
+        self.feature_criterion = nn.MSELoss()
+
 
     def main(self):
 
@@ -176,8 +178,8 @@ class Trainer:
         for batch_idx, (inputs, targets) in progress_bar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            outputs = self.small_net(inputs)
-            big_outputs = self.big_net(inputs)
+            outputs, features = self.small_net(inputs)
+            big_outputs, big_features = self.big_net(inputs)
             soft_big_outputs = F.softmax(big_outputs, dim=1)
             soft_outputs = F.softmax(outputs, dim=1)
 
@@ -188,6 +190,10 @@ class Trainer:
             if self.distillation_weight > 0:
                 distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
                 loss += self.distillation_weight * distillation_loss
+
+            feature_distillation_loss = self.feature_criterion(features, big_features)
+            loss += self.distillation_weight * feature_distillation_loss
+
             loss.backward()
             self.optimizer.step()
 
@@ -227,7 +233,7 @@ class Trainer:
             progress_bar = tqdm(enumerate(self.testloader), total=len(self.testloader))
             for batch_idx, (inputs, targets) in progress_bar:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                outputs = self.small_net(inputs)
+                outputs, _ = self.small_net(inputs)
                 loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()

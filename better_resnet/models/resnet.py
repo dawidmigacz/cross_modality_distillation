@@ -187,17 +187,17 @@ class ResNet(nn.Module):
             layers.append(block(self.in_planes, planes, stride, drop_prob, block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
-
+    
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
+        out_layer3 = self.layer3(out)
+        out = self.layer4(out_layer3)
         out = F.avg_pool2d(out, 4)
         out = out.view(out.size(0), -1)
         out = self.linear(out)
-        return out
+        return out, out_layer3
 
 
 def ResNet18(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
