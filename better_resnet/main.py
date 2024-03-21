@@ -85,12 +85,12 @@ class Trainer:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        self.trainset = torchvision.datasets.CIFAR10(
+        self.trainset = torchvision.datasets.CIFAR100(
             root='./data', train=True, download=False, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
             self.trainset, batch_size=128, shuffle=True, num_workers=2)
 
-        self.testset = torchvision.datasets.CIFAR10(
+        self.testset = torchvision.datasets.CIFAR100(
             root='./data', train=False, download=False, transform=self.transform_test)
         self.testloader = torch.utils.data.DataLoader(
             self.testset, batch_size=100, shuffle=False, num_workers=2)
@@ -109,10 +109,11 @@ class Trainer:
             self.big_net = torch.nn.DataParallel(self.big_net)
             cudnn.benchmark = True
 
-        self.checkpoint_big = torch.load(f'./checkpoint/{self.filename_big}')
+        if self.distillation_weight > 0:
+            self.checkpoint_big = torch.load(f'./checkpoint/{self.filename_big}')
 
-        self.big_net.load_state_dict(self.checkpoint_big['net'])
-        print('Loaded big net, acc', self.checkpoint_big['acc'])
+            self.big_net.load_state_dict(self.checkpoint_big['net'])
+            print('Loaded big net, acc', self.checkpoint_big['acc'])
 
         with open('nets_made.txt', 'w') as f:
             f.write(str(self.small_net))
@@ -160,7 +161,8 @@ class Trainer:
     def train(self, epoch):
         print('\nEpoch: %d' % epoch)
         self.small_net.train()
-        self.big_net.eval()
+        if self.distillation_weight > 0:
+            self.big_net.eval()
         common_seed = int(time.time()*10**10)
         eval_generator1 = torch.Generator()
         eval_generator1.manual_seed(common_seed)
@@ -179,8 +181,9 @@ class Trainer:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
             outputs, features = self.small_net(inputs)
-            big_outputs, big_features = self.big_net(inputs)
-            soft_big_outputs = F.softmax(big_outputs, dim=1)
+            if self.distillation_weight > 0:
+                big_outputs, big_features = self.big_net(inputs)
+                soft_big_outputs = F.softmax(big_outputs, dim=1)
             soft_outputs = F.softmax(outputs, dim=1)
 
 
@@ -191,8 +194,8 @@ class Trainer:
                 distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
                 loss += self.distillation_weight * distillation_loss * 0.1
 
-            feature_distillation_loss = self.feature_criterion(features, big_features)
-            loss += self.distillation_weight * feature_distillation_loss
+                feature_distillation_loss = self.feature_criterion(features, big_features)
+                loss += self.distillation_weight * feature_distillation_loss
 
             loss.backward()
             self.optimizer.step()
@@ -249,7 +252,7 @@ class Trainer:
 
         # Save checkpoint.
         acc = 100.*correct/total
-        if acc > self.best_acc and acc > 79.5:
+        if acc > self.best_acc and acc > 49.5:
             state = {
                 'net': self.small_net.state_dict(),
                 'acc': acc,
