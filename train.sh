@@ -11,4 +11,4 @@
 
 module load CUDA
 dw=$(echo "scale=1; $SLURM_ARRAY_TASK_ID / 10" | bc)
-python better_resnet/main.py --lr 0.1 --db_p 0.1 --db_size 3 --dw $dw --db_sync True --filename_small None --filename_big ckpt_acc95.75_e197_dbs3_dbp0.1_dw0.0.pth
+python better_resnet/main.py --lr 0.1 --db_p 0.1 --db_size 3 --dw $dw --filename_small None --filename_big ckpt_acc95.75_e197_dbs3_dbp0.1_dw0.0.pth

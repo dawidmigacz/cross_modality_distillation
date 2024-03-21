@@ -189,7 +189,7 @@ class Trainer:
 
             if self.distillation_weight > 0:
                 distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
-                loss += self.distillation_weight * distillation_loss
+                loss += self.distillation_weight * distillation_loss * 0.1
 
             feature_distillation_loss = self.feature_criterion(features, big_features)
             loss += self.distillation_weight * feature_distillation_loss
