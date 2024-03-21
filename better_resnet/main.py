@@ -252,7 +252,7 @@ class Trainer:
 
         # Save checkpoint.
         acc = 100.*correct/total
-        if acc > self.best_acc and acc > 79.5:
+        if acc > self.best_acc and acc > 49.5:
             state = {
                 'net': self.small_net.state_dict(),
                 'acc': acc,

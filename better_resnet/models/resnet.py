@@ -122,6 +122,7 @@ class BasicBlock(nn.Module):
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_planes, self.expansion*planes,
                           kernel_size=1, stride=stride, bias=False),
+                DropBlock2D(drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator),
                 nn.BatchNorm2d(self.expansion*planes)
             )
 
