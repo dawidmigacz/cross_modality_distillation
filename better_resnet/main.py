@@ -86,12 +86,12 @@ class Trainer:
         ])
 
         self.trainset = torchvision.datasets.CIFAR100(
-            root='./data', train=True, download=False, transform=self.transform_train)
+            root='./data', train=True, download=True, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
             self.trainset, batch_size=128, shuffle=True, num_workers=2)
 
         self.testset = torchvision.datasets.CIFAR100(
-            root='./data', train=False, download=False, transform=self.transform_test)
+            root='./data', train=False, download=True, transform=self.transform_test)
         self.testloader = torch.utils.data.DataLoader(
             self.testset, batch_size=100, shuffle=False, num_workers=2)
 
@@ -147,7 +147,12 @@ class Trainer:
             "distillation_weight": self.distillation_weight,
             
         })
-        for epoch in range(self.start_epoch, self.start_epoch+200):
+        total_epochs = 200
+        for epoch in range(self.start_epoch, self.start_epoch+total_epochs):
+            temp_drop_prob = epoch / total_epochs * self.dropblock_prob
+            self.small_net.drop_prob = temp_drop_prob
+            self.big_net.drop_prob = temp_drop_prob
+
             self.train(epoch)
             self.test(epoch)
             self.scheduler.step()
@@ -192,10 +197,10 @@ class Trainer:
 
             if self.distillation_weight > 0:
                 distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
-                loss += self.distillation_weight * distillation_loss * 0.1
+                loss += self.distillation_weight * distillation_loss 
 
                 feature_distillation_loss = self.feature_criterion(features, big_features)
-                loss += self.distillation_weight * feature_distillation_loss
+                loss += self.distillation_weight * feature_distillation_loss * 0
 
             loss.backward()
             self.optimizer.step()

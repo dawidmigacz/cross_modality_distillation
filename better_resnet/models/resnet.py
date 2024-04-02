@@ -127,8 +127,8 @@ class BasicBlock(nn.Module):
             )
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(self.db1(x))))
-        out = self.bn2(self.conv2(self.db2(out)))
+        out = F.relu(self.bn1(self.db1(self.conv1(x))))
+        out = self.bn2(self.db2(self.conv2(out)))
         out += self.shortcut(x)
         out = F.relu(out)
         return out
@@ -175,8 +175,8 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3,
                                stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1, drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2, drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1, drop_prob=0, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2, drop_prob=0, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2, drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2, drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.linear = nn.Linear(512*block.expansion, num_classes)
