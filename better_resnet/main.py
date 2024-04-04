@@ -1,4 +1,4 @@
-'''Train CIFAR10 with PyTorch.'''
+'''Train CIFAR100 with PyTorch.'''
 import time
 import torch
 import torch.nn as nn
@@ -17,6 +17,9 @@ from models.resnet import ResNet18
 from tqdm import tqdm
 import wandb
 from models.resnet import DropBlock2D
+import logging
+from datetime import datetime
+from uskd import USKDLoss
 
 def change_drop_generator(model, new_generator):
     for child in model.children():
@@ -34,10 +37,17 @@ class Trainer:
         self.start_epoch = 0
         self.small_net = None
         self.big_net = None
-        self.criterion = None
+        self.criterion = nn.CrossEntropyLoss()
         self.last_file = None
         self.dropblock_sync = False
         self.feature_criterion = nn.MSELoss()
+
+        # self.distillation_criterion = USKDLoss('uskd', True, channel=512, alpha=1.0, beta=0.1, mu=0.005, num_classes=100)
+        self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logging.basicConfig(filename=f'trainer_{timestamp}.log', level=logging.INFO)
+
+
 
 
     def main(self):
@@ -49,9 +59,13 @@ class Trainer:
         parser.add_argument('--db_p', default=0.1, type=float, help='dropblock_prob')
         parser.add_argument('--db_size', default=3, type=int, help='dropblock_size')
         parser.add_argument('--dw', default=0.0, type=float, help='distillation_weight')
-        parser.add_argument('--db_sync', default=False, type=bool, help='dropblock_sync')
+        parser.add_argument('--db_sync', action='store_true', help='dropblock_sync')        
         parser.add_argument('--filename_small', default=None, type=str, help='filename - to resume')
         parser.add_argument('--filename_big', default=None, type=str, help='filename_big')
+        parser.add_argument('--dist_loss', default="KL", type=str, help='distillation loss')
+
+    
+
 
         self.args = parser.parse_args()
 
@@ -64,12 +78,27 @@ class Trainer:
         self.dropblock_sync = self.args.db_sync
         self.filename_small = self.args.filename_small
         self.filename_big = self.args.filename_big
+        self.dist_loss = self.args.dist_loss
+
+        if self.dist_loss == "KL":
+            self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
+        elif self.dist_loss == "MSE":
+            self.distillation_criterion = nn.MSELoss()
+        elif self.dist_loss == "USKD":
+            self.distillation_criterion = USKDLoss('uskd', True, channel=512, alpha=1.0, beta=0.1, mu=0.005, num_classes=100)
+        else:
+            raise ValueError("Invalid distillation loss")
 
 
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.best_acc = 0  # best test accuracy
         self.start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+        logging.info(f"Dropblock prob: {self.dropblock_prob}, Dropblock size: {self.dropblock_size}, Distillation weight: {self.distillation_weight}, Dropblock sync: {self.dropblock_sync}")
+        logging.info(f"Filename small: {self.filename_small}, Filename big: {self.filename_big}")
+        logging.info(f"Device: {self.device}")
+        logging.info(f"Start epoch: {self.start_epoch}")
 
         # Data
         # print('==> Preparing data..')
@@ -129,13 +158,12 @@ class Trainer:
             self.best_acc = self.checkpoint['acc']
             self.start_epoch = self.checkpoint['epoch']
 
-        self.criterion = nn.CrossEntropyLoss()
-        self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
+        
         self.optimizer = optim.SGD(self.small_net.parameters(), lr=self.args.lr,
                             momentum=0.9, weight_decay=5e-4)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200)
 
-        self.run_name = f"dbp{self.dropblock_prob}_dbs{self.dropblock_size}_dw{self.distillation_weight}"
+        self.run_name = f"dbp{self.dropblock_prob}_dbs{self.dropblock_size}_dw{self.distillation_weight}_{self.dist_loss}"
         print(self.run_name)
         wandb.init(project="hinton", 
                 mode="run",
@@ -158,7 +186,7 @@ class Trainer:
             self.scheduler.step()
 
         with open('results.txt', 'a') as f:
-            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}\n")
+            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}, {self.filename_small}, {self.filename_big}, {self.dist_loss}\n")
         wandb.finish()
 
     # Training
@@ -178,9 +206,15 @@ class Trainer:
             eval_generator2.manual_seed(common_seed+17)
         change_drop_generator(self.small_net, eval_generator1)
         change_drop_generator(self.big_net, eval_generator2)
+        #print net structures to file
+        with open('nets_train.txt', 'a') as f:
+            f.write(str(self.small_net))
+            f.write(str(self.big_net))
+        
         train_loss = 0
         correct = 0
         total = 0
+        batch_idx = 0
         progress_bar = tqdm(enumerate(self.trainloader), total=len(self.trainloader))
         for batch_idx, (inputs, targets) in progress_bar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
@@ -192,15 +226,24 @@ class Trainer:
             soft_outputs = F.softmax(outputs, dim=1)
 
 
-            loss = self.criterion(outputs, targets)
+            loss = 0# self.criterion(outputs, targets)
+            # print(f"outputs device: {outputs.device}")
+            # print(f"big_outputs device: {big_outputs.device}")
+            # print(f"big_features['layer4'] device: {big_features['layer4'].device}")
+            # print(f"targets device: {targets.device}")
 
-
+            # for key, value in features.items():
+            #     print(f"key: {key}, value: {value.shape}")
             if self.distillation_weight > 0:
-                distillation_loss = self.distillation_criterion(soft_outputs, soft_big_outputs)
-                loss += self.distillation_weight * distillation_loss 
+                if self.dist_loss == "KL":
+                    distillation_loss = self.distillation_criterion(outputs, big_outputs)
+                elif self.dist_loss == "MSE":
+                    distillation_loss = self.distillation_criterion(outputs, big_outputs)
+                elif self.dist_loss == "USKD":
+                    distillation_loss = self.distillation_criterion(big_features["reshaped_out"], outputs, targets)
 
-                feature_distillation_loss = self.feature_criterion(features, big_features)
-                loss += self.distillation_weight * feature_distillation_loss * 0
+
+                loss += self.distillation_weight * distillation_loss 
 
             loss.backward()
             self.optimizer.step()
@@ -214,6 +257,8 @@ class Trainer:
                 % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
             if wandb.run.mode != "disabled":
                 wandb.log({"train_loss": train_loss/(batch_idx+1), "train_acc": 100.*correct/total})
+
+        logging.info(f"TRAIN # Epoch: {epoch}, Loss: {train_loss/(batch_idx+1)}, Acc: {100.*correct/total}")
 
 
     def test(self, epoch):
@@ -237,6 +282,7 @@ class Trainer:
         test_loss = 0
         correct = 0
         total = 0
+        batch_idx = 0
         with torch.no_grad():
             progress_bar = tqdm(enumerate(self.testloader), total=len(self.testloader))
             for batch_idx, (inputs, targets) in progress_bar:
@@ -253,6 +299,8 @@ class Trainer:
                     % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
                 if wandb.run.mode != "disabled":
                     wandb.log({"test_loss": test_loss/(batch_idx+1), "test_acc": 100.*correct/total})
+            
+            logging.info(f"TEST  # Epoch: {epoch}, Loss: {test_loss/(batch_idx+1)}, Acc: {100.*correct/total}")
 
 
         # Save checkpoint.
@@ -263,9 +311,9 @@ class Trainer:
                 'acc': acc,
                 'epoch': epoch,
             }
-            filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight)
+            filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight, self.dist_loss)
             if self.dropblock_sync:
-                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight)
+                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight, self.dist_loss)
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
             torch.save(state, filename)
