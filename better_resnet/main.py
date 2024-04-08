@@ -99,6 +99,7 @@ class Trainer:
         logging.info(f"Filename small: {self.filename_small}, Filename big: {self.filename_big}")
         logging.info(f"Device: {self.device}")
         logging.info(f"Start epoch: {self.start_epoch}")
+        logging.info(f"Distillation loss: {self.dist_loss}")
 
         # Data
         # print('==> Preparing data..')
