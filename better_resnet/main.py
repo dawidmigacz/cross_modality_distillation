@@ -63,6 +63,7 @@ class Trainer:
         parser.add_argument('--filename_small', default=None, type=str, help='filename - to resume')
         parser.add_argument('--filename_big', default=None, type=str, help='filename_big')
         parser.add_argument('--dist_loss', default="KL", type=str, help='distillation loss')
+        parser.add_argument('--big_drop', default=0.0, type=float, help='big_net_inference_drop')
 
     
 
@@ -79,6 +80,7 @@ class Trainer:
         self.filename_small = self.args.filename_small
         self.filename_big = self.args.filename_big
         self.dist_loss = self.args.dist_loss
+        self.big_net_inference_drop = self.args.big_net_inference_drop
 
         if self.dist_loss == "KL":
             self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
@@ -131,7 +133,7 @@ class Trainer:
 
         self.small_net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=False)
         self.small_net = self.small_net.to(self.device)
-        self.big_net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=True)
+        self.big_net = ResNet18(dropblock_prob= self.big_net_inference_drop, dropblock_size=self.dropblock_size, drop_at_inference=True)
         self.big_net = self.big_net.to(self.device)
         
         if self.device == 'cuda':
@@ -164,7 +166,7 @@ class Trainer:
                             momentum=0.9, weight_decay=5e-4)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=200)
 
-        self.run_name = f"dbp{self.dropblock_prob}_dbs{self.dropblock_size}_dw{self.distillation_weight}_{self.dist_loss}"
+        self.run_name = f"dbp{self.dropblock_prob}!{self.big_net_inference_drop}_dbs{self.dropblock_size}_dw{self.distillation_weight}_{self.dist_loss}"
         print(self.run_name)
         wandb.init(project="hinton", 
                 mode="run",
@@ -174,7 +176,15 @@ class Trainer:
             "dropblock_prob": self.dropblock_prob,
             "dropblock_size": self.dropblock_size,
             "distillation_weight": self.distillation_weight,
-            
+            "distillation_loss": self.dist_loss,
+            "big_net_inference_drop": self.big_net_inference_drop,
+            "dropblock_sync": self.dropblock_sync,
+            "filename_small": self.filename_small,
+            "filename_big": self.filename_big,
+            "device": self.device,
+            "start_epoch": self.start_epoch,
+            "lr": self.args.lr
+                        
         })
         total_epochs = 200
         for epoch in range(self.start_epoch, self.start_epoch+total_epochs):
@@ -187,7 +197,7 @@ class Trainer:
             self.scheduler.step()
 
         with open('results.txt', 'a') as f:
-            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}, {self.filename_small}, {self.filename_big}, {self.dist_loss}\n")
+            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}, {self.filename_small}, {self.filename_big}, {self.dist_loss}, {self.big_net_inference_drop}\n")
         wandb.finish()
 
     # Training
@@ -312,9 +322,9 @@ class Trainer:
                 'acc': acc,
                 'epoch': epoch,
             }
-            filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight, self.dist_loss)
+            filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.big_net_inference_drop, self.distillation_weight, self.dist_loss)
             if self.dropblock_sync:
-                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}_dw{}_{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.distillation_weight, self.dist_loss)
+                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob,  self.big_net_inference_drop,  self.distillation_weight, self.dist_loss)
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
             torch.save(state, filename)
