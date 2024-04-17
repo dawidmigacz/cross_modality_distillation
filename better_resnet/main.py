@@ -13,13 +13,25 @@ import os
 import argparse
 
 from models import *
-from models.resnet import ResNet18
+from models.resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from tqdm import tqdm
 import wandb
 from models.resnet import DropBlock2D
 import logging
 from datetime import datetime
 from uskd import USKDLoss
+
+class HalfCIFAR100(torchvision.datasets.CIFAR100):
+    def __init__(self, *args, **kwargs):
+        super(HalfCIFAR100, self).__init__(*args, **kwargs)
+
+        # Get the indices of the samples that belong to the first 50 classes
+        half_classes_indices = [i for i, target in enumerate(self.targets) if target < 50]
+
+        # Filter the data and targets based on these indices
+        self.data = self.data[half_classes_indices]
+        self.targets = [self.targets[i] for i in half_classes_indices]
+
 
 def change_drop_generator(model, new_generator):
     for child in model.children():
@@ -64,8 +76,9 @@ class Trainer:
         parser.add_argument('--filename_big', default=None, type=str, help='filename_big')
         parser.add_argument('--dist_loss', default="KL", type=str, help='distillation loss')
         parser.add_argument('--big_drop', default=0.0, type=float, help='big_net_inference_drop')
+        parser.add_argument('--type_small', default="resnet18", type=str, help='type_small')
+        parser.add_argument('--type_big', default="resnet18", type=str, help='type_big')
 
-    
 
 
         self.args = parser.parse_args()
@@ -81,6 +94,9 @@ class Trainer:
         self.filename_big = self.args.filename_big
         self.dist_loss = self.args.dist_loss
         self.big_net_inference_drop = self.args.big_drop
+        self.type_small = self.args.type_small
+        self.type_big = self.args.type_big
+
 
         if self.dist_loss == "KL":
             self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
@@ -120,6 +136,8 @@ class Trainer:
 
         self.trainset = torchvision.datasets.CIFAR100(
             root='./data', train=True, download=True, transform=self.transform_train)
+        self.trainset = HalfCIFAR100(
+            root='./data', train=True, download=True, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
             self.trainset, batch_size=128, shuffle=True, num_workers=2)
 
@@ -131,10 +149,38 @@ class Trainer:
         self.classes = ('plane', 'car', 'bird', 'cat', 'deer',
                 'dog', 'frog', 'horse', 'ship', 'truck')
 
+        # Model
+        if self.type_small == "resnet18":
+            snet = ResNet18
+        elif self.type_small == "resnet34":
+            snet = ResNet34
+        elif self.type_small == "resnet50":
+            snet = ResNet50
+        elif self.type_small == "resnet101":
+            snet = ResNet101
+        elif self.type_small == "resnet152":
+            snet = ResNet152
+        else:
+            raise ValueError("Invalid type_small")
+        
+        if self.type_big == "resnet18":
+            bnet = ResNet18
+        elif self.type_big == "resnet34":
+            bnet = ResNet34
+        elif self.type_big == "resnet50":
+            bnet = ResNet50
+        elif self.type_big == "resnet101":
+            bnet = ResNet101
+        elif self.type_big == "resnet152":
+            bnet = ResNet152
+        else:
+            raise ValueError("Invalid type_big")
+        
 
-        self.small_net = ResNet18(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=False)
+        
+        self.small_net = snet(dropblock_prob=self.dropblock_prob, dropblock_size=self.dropblock_size, drop_at_inference=False)
         self.small_net = self.small_net.to(self.device)
-        self.big_net = ResNet18(dropblock_prob= self.big_net_inference_drop, dropblock_size=self.dropblock_size, drop_at_inference=True)
+        self.big_net = bnet(dropblock_prob= self.big_net_inference_drop, dropblock_size=self.dropblock_size, drop_at_inference=True)
         self.big_net = self.big_net.to(self.device)
         
         if self.device == 'cuda':
@@ -184,7 +230,10 @@ class Trainer:
             "filename_big": self.filename_big,
             "device": self.device,
             "start_epoch": self.start_epoch,
-            "lr": self.args.lr
+            "lr": self.args.lr,
+            "small_net": self.type_small,
+            "big_net": self.type_big
+
                         
         })
         total_epochs = 200
@@ -198,7 +247,7 @@ class Trainer:
             self.scheduler.step()
 
         with open('results.txt', 'a') as f:
-            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}, {self.filename_small}, {self.filename_big}, {self.dist_loss}, {self.big_net_inference_drop}\n")
+            f.write(f"{self.dropblock_prob}, {self.dropblock_size}, {self.distillation_weight}, {epoch}, {self.best_acc}, {self.dropblock_sync}, {self.filename_small}, {self.filename_big}, {self.dist_loss}, {self.big_net_inference_drop}, {self.type_small}, {self.type_big}\n")
         wandb.finish()
 
     # Training
@@ -253,9 +302,12 @@ class Trainer:
                     distillation_loss = self.distillation_criterion(outputs, big_outputs)
                 elif self.dist_loss == "USKD":
                     distillation_loss = self.distillation_criterion(big_features["reshaped_out"], outputs, targets)
-
-
                 loss += self.distillation_weight * distillation_loss 
+            else:
+                distillation_loss = 0
+                loss = self.criterion(outputs, targets)
+
+                
 
             loss.backward()
             self.optimizer.step()
@@ -323,9 +375,9 @@ class Trainer:
                 'acc': acc,
                 'epoch': epoch,
             }
-            filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob, self.big_net_inference_drop, self.distillation_weight, self.dist_loss)
+            filename = './checkpoint/ckpt_{}_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}.pth'.format(self.type_small, acc, epoch, self.dropblock_size, self.dropblock_prob, self.big_net_inference_drop, self.distillation_weight, self.dist_loss)
             if self.dropblock_sync:
-                filename = './checkpoint/ckpt_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}_sync.pth'.format(acc, epoch, self.dropblock_size, self.dropblock_prob,  self.big_net_inference_drop,  self.distillation_weight, self.dist_loss)
+                filename = './checkpoint/ckpt_{}_acc{:.2f}_e{}_dbs{}_dbp{}!{}_dw{}_{}_sync.pth'.format(self.type_small, acc, epoch, self.dropblock_size, self.dropblock_prob,  self.big_net_inference_drop,  self.distillation_weight, self.dist_loss)
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
             torch.save(state, filename)
