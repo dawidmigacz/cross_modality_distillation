@@ -137,13 +137,16 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, in_planes, planes, stride=1):
+    def __init__(self, in_planes, planes, stride=1, drop_prob=0.1, block_size=3, drop_at_inference=False, drop_generator=None):
         super(Bottleneck, self).__init__()
+        self.db1 = DropBlock2D(drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
+        self.db2 = DropBlock2D(drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3,
                                stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
+        self.db3 = DropBlock2D(drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
         self.conv3 = nn.Conv2d(planes, self.expansion *
                                planes, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(self.expansion*planes)
@@ -153,13 +156,17 @@ class Bottleneck(nn.Module):
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_planes, self.expansion*planes,
                           kernel_size=1, stride=stride, bias=False),
+                DropBlock2D(drop_prob=drop_prob, block_size=block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator),
                 nn.BatchNorm2d(self.expansion*planes)
             )
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = F.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
+        # out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn1(self.db1(self.conv1(x))))
+        # out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn2(self.db2(self.conv2(out)))
+        # out = self.bn3(self.conv3(out))
+        out = self.bn3(self.db3(self.conv3(out)))
         out += self.shortcut(x)
         out = F.relu(out)
         return out
@@ -204,20 +211,21 @@ def ResNet18(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, dro
     return ResNet(BasicBlock, [2, 2, 2, 2], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
 
-def ResNet34():
-    return ResNet(BasicBlock, [3, 4, 6, 3])
+def ResNet34(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
+    return ResNet(BasicBlock, [3, 4, 6, 3], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
 
-def ResNet50():
-    return ResNet(Bottleneck, [3, 4, 6, 3])
+
+def ResNet50(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
+    return ResNet(Bottleneck, [3, 4, 6, 3], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
 
-def ResNet101():
-    return ResNet(Bottleneck, [3, 4, 23, 3])
+def ResNet101(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
+    return ResNet(Bottleneck, [3, 4, 23, 3], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
 
-def ResNet152():
-    return ResNet(Bottleneck, [3, 8, 36, 3])
+def ResNet152(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
+    return ResNet(Bottleneck, [3, 8, 36, 3], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
 
 def test():
