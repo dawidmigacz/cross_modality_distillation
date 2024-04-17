@@ -80,7 +80,7 @@ class Trainer:
         self.filename_small = self.args.filename_small
         self.filename_big = self.args.filename_big
         self.dist_loss = self.args.dist_loss
-        self.big_net_inference_drop = self.args.big_net_inference_drop
+        self.big_net_inference_drop = self.args.big_drop
 
         if self.dist_loss == "KL":
             self.distillation_criterion = nn.KLDivLoss(reduction='batchmean')
@@ -107,6 +107,7 @@ class Trainer:
         # print('==> Preparing data..')
         self.transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
+            
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
