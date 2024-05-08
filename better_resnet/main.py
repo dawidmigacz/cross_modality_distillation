@@ -21,6 +21,7 @@ import logging
 from datetime import datetime
 from uskd import USKDLoss
 
+from calc_2_wasserstein_dist import calculate_2_wasserstein_dist
 class HalfCIFAR100(torchvision.datasets.CIFAR100):
     def __init__(self, *args, **kwargs):
         super(HalfCIFAR100, self).__init__(*args, **kwargs)
@@ -78,8 +79,13 @@ class Trainer:
         parser.add_argument('--big_drop', default=0.0, type=float, help='big_net_inference_drop')
         parser.add_argument('--type_small', default="resnet18", type=str, help='type_small')
         parser.add_argument('--type_big', default="resnet18", type=str, help='type_big')
+        parser.add_argument('--wasserstein_n', default=1, type=int, help='wasserstein_n')
 
-
+        # delete all files whose name contains "predictions"
+        for f in os.listdir('.'):
+            if 'predictions' in f:
+                os.remove(f)
+                print('Removed', f)
 
         self.args = parser.parse_args()
 
@@ -96,6 +102,7 @@ class Trainer:
         self.big_net_inference_drop = self.args.big_drop
         self.type_small = self.args.type_small
         self.type_big = self.args.type_big
+        self.wasserstein_n = self.args.wasserstein_n
 
 
         if self.dist_loss == "KL":
@@ -104,6 +111,8 @@ class Trainer:
             self.distillation_criterion = nn.MSELoss()
         elif self.dist_loss == "USKD":
             self.distillation_criterion = USKDLoss('uskd', True, channel=512, alpha=1.0, beta=0.1, mu=0.005, num_classes=100)
+        elif self.dist_loss == "WASS":
+            self.distillation_criterion = calculate_2_wasserstein_dist
         else:
             raise ValueError("Invalid distillation loss")
 
@@ -135,8 +144,8 @@ class Trainer:
 
         self.trainset = torchvision.datasets.CIFAR100(
             root='./data', train=True, download=True, transform=self.transform_train)
-        self.trainset = HalfCIFAR100(
-            root='./data', train=True, download=True, transform=self.transform_train)
+        # self.trainset = HalfCIFAR100(
+        #     root='./data', train=True, download=True, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
             self.trainset, batch_size=128, shuffle=True, num_workers=2)
 
@@ -231,7 +240,9 @@ class Trainer:
             "start_epoch": self.start_epoch,
             "lr": self.args.lr,
             "small_net": self.type_small,
-            "big_net": self.type_big
+            "big_net": self.type_big,
+            "wasserstein_n": self.wasserstein_n
+
 
                         
         })
@@ -279,34 +290,66 @@ class Trainer:
         for batch_idx, (inputs, targets) in progress_bar:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            outputs, features = self.small_net(inputs)
-            if self.distillation_weight > 0:
-                big_outputs, big_features = self.big_net(inputs)
-                soft_big_outputs = F.softmax(big_outputs, dim=1)
-            soft_outputs = F.softmax(outputs, dim=1)
+            if self.dist_loss != "WASS":
+                outputs, features = self.small_net(inputs)
+                if self.distillation_weight > 0:
+                    big_outputs, big_features = self.big_net(inputs)
+                    soft_big_outputs = F.softmax(big_outputs, dim=1)
+                soft_outputs = F.softmax(outputs, dim=1)
 
 
-            loss = 0# self.criterion(outputs, targets)
-            # print(f"outputs device: {outputs.device}")
-            # print(f"big_outputs device: {big_outputs.device}")
-            # print(f"big_features['layer4'] device: {big_features['layer4'].device}")
-            # print(f"targets device: {targets.device}")
+                loss = 0# self.criterion(outputs, targets)
+                # print(f"outputs device: {outputs.device}")
+                # print(f"big_outputs device: {big_outputs.device}")
+                # print(f"big_features['layer4'] device: {big_features['layer4'].device}")
+                # print(f"targets device: {targets.device}")
 
-            # for key, value in features.items():
-            #     print(f"key: {key}, value: {value.shape}")
-            if self.distillation_weight > 0:
-                if self.dist_loss == "KL":
-                    distillation_loss = self.distillation_criterion(outputs, big_outputs)
-                elif self.dist_loss == "MSE":
-                    distillation_loss = self.distillation_criterion(outputs, big_outputs)
-                elif self.dist_loss == "USKD":
-                    distillation_loss = self.distillation_criterion(big_features["reshaped_out"], outputs, targets)
-                loss += self.distillation_weight * distillation_loss 
+                # for key, value in features.items():
+                #     print(f"key: {key}, value: {value.shape}")
+                if self.distillation_weight > 0:
+                    if self.dist_loss == "KL":
+                        distillation_loss = self.distillation_criterion(outputs, big_outputs)
+                    elif self.dist_loss == "MSE":
+                        distillation_loss = self.distillation_criterion(outputs, big_outputs)
+                    elif self.dist_loss == "USKD":
+                        distillation_loss = self.distillation_criterion(big_features["reshaped_out"], outputs, targets)
+                    loss += self.distillation_weight * distillation_loss 
+                else:
+                    distillation_loss = 0
+                    loss = self.criterion(outputs, targets)
             else:
-                distillation_loss = 0
-                loss = self.criterion(outputs, targets)
+                output_list_small = []
+                feature_list_small = []
+                output_list_big = []
+                feature_list_big = []
 
+                for i in range(self.wasserstein_n):
+                    outputs, features = self.small_net(inputs)
+                    outputs = F.softmax(outputs, dim=1)
+                    output_list_small.append(outputs)
+                    feature_list_small.append(features)
+                    big_outputs, big_features = self.big_net(inputs)
+                    big_outputs = F.softmax(big_outputs, dim=1)
+                    output_list_big.append(big_outputs)
+                    feature_list_big.append(big_features)
                 
+                # [b, n] (e.g. batch_size x num_features) is the input to the wasserstein distance
+                
+
+                outputss = torch.stack(output_list_small, dim=1)
+                big_outputss = torch.stack(output_list_big, dim=1)
+                loss = 0
+                for iii in range(output_list_small[0].shape[0]):
+                    # print(outputss[iii], big_outputss[iii])
+                    #the following line should be executed only once
+
+
+                    loss += calculate_2_wasserstein_dist(outputss[iii], big_outputss[iii])
+                    with open('predictions_train__'+str(epoch)+'.txt', 'a') as f:
+                        for i in range(len(output_list_small)):
+                            f.write(f"s{output_list_small[i][iii]}\n")
+                            f.write(f"b{output_list_big[i][iii]}\n")
+
 
             loss.backward()
             self.optimizer.step()
@@ -315,7 +358,9 @@ class Trainer:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-
+            with open('predictions_train_'+str(epoch)+'.txt', 'a') as f:
+                for i in range(outputs.shape[0]):
+                    f.write(f"{outputs[i]}\n")
             progress_bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
                 % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
             if wandb.run.mode != "disabled":
@@ -357,7 +402,9 @@ class Trainer:
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
-
+                with open('predictions_test_'+str(epoch)+'.txt', 'a') as f:
+                    for i in range(len(predicted)):
+                        f.write(f"{predicted[i].item()}\n")
                 progress_bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
                     % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
                 if wandb.run.mode != "disabled":
