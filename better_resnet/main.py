@@ -148,7 +148,7 @@ class Trainer:
         # self.trainset = HalfCIFAR100(
         #     root='./data', train=True, download=True, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
-            self.trainset, batch_size=128, shuffle=True, num_workers=2)
+            self.trainset, batch_size=16, shuffle=True, num_workers=2)
 
         self.testset = torchvision.datasets.CIFAR100(
             root='./data', train=False, download=True, transform=self.transform_test)
@@ -319,20 +319,26 @@ class Trainer:
                     distillation_loss = 0
                     loss = self.criterion(outputs, targets)
             else:
-                output_list_small = []
-                feature_list_small = []
+
                 output_list_big = []
                 feature_list_big = []
-
+                output_list_small = []
+                feature_list_small = []
                 for i in range(self.wasserstein_n):
-                    outputs, features = self.small_net(inputs)
-                    outputs = F.softmax(outputs, dim=1)
-                    output_list_small.append(outputs)
-                    feature_list_small.append(features)
                     big_outputs, big_features = self.big_net(inputs)
                     big_outputs = F.softmax(big_outputs, dim=1)
-                    output_list_big.append(big_outputs)
+                    top_big_outputs, top_big_indices = torch.topk(big_outputs, k=5, dim=1)
+                    output_list_big.append(top_big_outputs)
                     feature_list_big.append(big_features)
+                    
+                    outputs, features = self.small_net(inputs)
+                    outputs = F.softmax(outputs, dim=1)
+                    top_outputs = torch.gather(outputs, 1, top_big_indices)
+                    output_list_small.append(top_outputs)
+                    feature_list_small.append(features)
+                    
+
+                    
                 
                 # [b, n] (e.g. batch_size x num_features) is the input to the wasserstein distance
                 
