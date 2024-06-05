@@ -210,9 +210,13 @@ class ResNet(nn.Module):
 def ResNet18(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
     return ResNet(BasicBlock, [2, 2, 2, 2], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
 
+def ResNet8(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
+    return ResNet(BasicBlock, [1, 1, 1, 1], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
+
 
 def ResNet34(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):
     return ResNet(BasicBlock, [3, 4, 6, 3], drop_prob=dropblock_prob, block_size=dropblock_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator)
+
 
 
 

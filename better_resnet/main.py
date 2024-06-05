@@ -13,7 +13,7 @@ import os
 import argparse
 
 from models import *
-from models.resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from models.resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152, ResNet8
 from tqdm import tqdm
 import wandb
 from models.resnet import DropBlock2D
@@ -88,7 +88,6 @@ class Trainer:
                 print('Removed', f)
 
         self.args = parser.parse_args()
-
         print(self.args)
 
 
@@ -148,7 +147,7 @@ class Trainer:
         # self.trainset = HalfCIFAR100(
         #     root='./data', train=True, download=True, transform=self.transform_train)
         self.trainloader = torch.utils.data.DataLoader(
-            self.trainset, batch_size=16, shuffle=True, num_workers=2)
+            self.trainset, batch_size=128, shuffle=True, num_workers=2)
 
         self.testset = torchvision.datasets.CIFAR100(
             root='./data', train=False, download=True, transform=self.transform_test)
@@ -169,6 +168,9 @@ class Trainer:
             snet = ResNet101
         elif self.type_small == "resnet152":
             snet = ResNet152
+        elif self.type_small == "resnet8":
+            snet = ResNet8
+
         else:
             raise ValueError("Invalid type_small")
         
@@ -182,6 +184,8 @@ class Trainer:
             bnet = ResNet101
         elif self.type_big == "resnet152":
             bnet = ResNet152
+        elif self.type_big == "resnet8":
+            bnet = ResNet8
         else:
             raise ValueError("Invalid type_big")
         
@@ -342,7 +346,7 @@ class Trainer:
                 
                 # [b, n] (e.g. batch_size x num_features) is the input to the wasserstein distance
                 
-
+                
                 outputss = torch.stack(output_list_small, dim=1)
                 big_outputss = torch.stack(output_list_big, dim=1)
                 loss = 0
