@@ -195,16 +195,36 @@ class ResNet(nn.Module):
             layers.append(block(self.in_planes, planes, stride, drop_prob, block_size, drop_at_inference=drop_at_inference, drop_generator=drop_generator))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
-    def forward(self, x):
+    def forward(self, x, n=1, topk=5):
+        if n == 1:
+            initial_out = F.relu(self.bn1(self.conv1(x)))
+            layer1_out = self.layer1(initial_out)
+            layer2_out = self.layer2(layer1_out)
+            layer3_out = self.layer3(layer2_out)
+            layer4_out = self.layer4(layer3_out)
+            avg_pool_out = F.avg_pool2d(layer4_out, 4)
+            reshaped_out = avg_pool_out.view(avg_pool_out.size(0), -1)
+            final_out = self.linear(reshaped_out)
+            return final_out, {'initial_out': initial_out, 'layer1': layer1_out, 'layer2': layer2_out, 'layer3': layer3_out, 'layer4': layer4_out, 'avg_pool_out': avg_pool_out, 'reshaped_out': reshaped_out}
+        else:
+            return self.sample(x, n, topk)
+
+    def sample(self, x, n, topk=5):
         initial_out = F.relu(self.bn1(self.conv1(x)))
         layer1_out = self.layer1(initial_out)
         layer2_out = self.layer2(layer1_out)
-        layer3_out = self.layer3(layer2_out)
-        layer4_out = self.layer4(layer3_out)
-        avg_pool_out = F.avg_pool2d(layer4_out, 4)
-        reshaped_out = avg_pool_out.view(avg_pool_out.size(0), -1)
-        final_out = self.linear(reshaped_out)
-        return final_out, {'initial_out': initial_out, 'layer1': layer1_out, 'layer2': layer2_out, 'layer3': layer3_out, 'layer4': layer4_out, 'avg_pool_out': avg_pool_out, 'reshaped_out': reshaped_out}
+        output_list = []
+        for i in range(n):
+            layer3_out = self.layer3(layer2_out)
+            layer4_out = self.layer4(layer3_out)
+            avg_pool_out = F.avg_pool2d(layer4_out, 4)
+            reshaped_out = avg_pool_out.view(avg_pool_out.size(0), -1)
+            final_out = self.linear(reshaped_out)
+            outputs = F.softmax(final_out, dim=1)
+            top_outputs, top_big_indices = torch.topk(outputs, k=topk, dim=1)
+            output_list.append(top_outputs)
+        outputss = torch.stack(output_list, dim=1)
+        return output_list
 
 
 def ResNet18(dropblock_prob=0.11, dropblock_size=3, drop_at_inference=False, drop_generator=None):

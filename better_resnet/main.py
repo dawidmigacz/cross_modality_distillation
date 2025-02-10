@@ -324,30 +324,33 @@ class Trainer:
                     loss = self.criterion(outputs, targets)
             else:
 
-                output_list_big = []
-                feature_list_big = []
-                output_list_small = []
-                feature_list_small = []
-                for i in range(self.wasserstein_n):
-                    big_outputs, big_features = self.big_net(inputs)
-                    big_outputs = F.softmax(big_outputs, dim=1)
-                    top_big_outputs, top_big_indices = torch.topk(big_outputs, k=5, dim=1)
-                    output_list_big.append(top_big_outputs)
-                    feature_list_big.append(big_features)
+                # output_list_big = []
+                # feature_list_big = []
+                # output_list_small = []
+                # feature_list_small = []
+                # for i in range(self.wasserstein_n):
+                #     big_outputs, big_features = self.big_net(inputs)
+                #     big_outputs = F.softmax(big_outputs, dim=1)
+                #     top_big_outputs, top_big_indices = torch.topk(big_outputs, k=5, dim=1)
+                #     output_list_big.append(top_big_outputs)
+                #     feature_list_big.append(big_features)
                     
-                    outputs, features = self.small_net(inputs)
-                    outputs = F.softmax(outputs, dim=1)
-                    top_outputs = torch.gather(outputs, 1, top_big_indices)
-                    output_list_small.append(top_outputs)
-                    feature_list_small.append(features)
+                #     outputs, features = self.small_net(inputs)
+                #     outputs = F.softmax(outputs, dim=1)
+                #     top_outputs = torch.gather(outputs, 1, top_big_indices)
+                #     output_list_small.append(top_outputs)
+                #     feature_list_small.append(features)
                     
 
                     
                 
                 # [b, n] (e.g. batch_size x num_features) is the input to the wasserstein distance
                 
-                
+                output_list_big = self.big_net(inputs, n=self.wasserstein_n, topk=10)
+                output_list_small = self.small_net(inputs, n=self.wasserstein_n, topk=10)
+                outputs = output_list_small[0]
                 outputss = torch.stack(output_list_small, dim=1)
+                print(outputss[1].shape)
                 big_outputss = torch.stack(output_list_big, dim=1)
                 loss = 0
                 for iii in range(output_list_small[0].shape[0]):
@@ -356,10 +359,10 @@ class Trainer:
 
 
                     loss += calculate_2_wasserstein_dist(outputss[iii], big_outputss[iii])
-                    with open('predictions_train__'+str(epoch)+'.txt', 'a') as f:
-                        for i in range(len(output_list_small)):
-                            f.write(f"s{output_list_small[i][iii]}\n")
-                            f.write(f"b{output_list_big[i][iii]}\n")
+                    # with open('predictions_train__'+str(epoch)+'.txt', 'a') as f:
+                    #     for i in range(len(output_list_small)):
+                    #         f.write(f"s{output_list_small[i][iii]}\n")
+                    #         f.write(f"b{output_list_big[i][iii]}\n")
 
 
             loss.backward()
@@ -369,9 +372,9 @@ class Trainer:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-            with open('predictions_train_'+str(epoch)+'.txt', 'a') as f:
-                for i in range(outputs.shape[0]):
-                    f.write(f"{outputs[i]}\n")
+            # with open('predictions_train_'+str(epoch)+'.txt', 'a') as f:
+            #     for i in range(outputs.shape[0]):
+            #         f.write(f"{outputs[i]}\n")
             progress_bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
                 % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
             if wandb.run.mode != "disabled":
